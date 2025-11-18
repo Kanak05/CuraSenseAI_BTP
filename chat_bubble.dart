@@ -89,6 +89,7 @@ class ChatBubble extends StatelessWidget {
                       if (await file.exists()) {
                         await OpenFilex.open(filePath);
                       } else {
+                        if (! context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text("File not found: $fileName"),
