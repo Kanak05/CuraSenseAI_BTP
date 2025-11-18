@@ -1,20 +1,62 @@
-import pickle
+# indexing_chroma.py (fixed for NEW Chroma API)
+import json
 from pathlib import Path
-from llama_index.core import VectorStoreIndex, StorageContext
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from sentence_transformers import SentenceTransformer
+import numpy as np
+from chromadb import PersistentClient   # NEW client
 
-# 1. Load processed chunks (nodes)
-with open("output/nodes.pkl", "rb") as f:
-    nodes = pickle.load(f)
+BATCH_SIZE = 512
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# 2. Define embedding model
-embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+RAW_PATH = Path("output/chroma_raw.json")
+CHROMA_DIR = Path("chroma_db")
+CHROMA_DIR.mkdir(exist_ok=True)
 
-# 3. Build the index
-index = VectorStoreIndex(nodes, embed_model=embed_model)
+def batchify(items, size=512):
+    for i in range(0, len(items), size):
+        yield items[i:i+size]
 
-# 4. Save index to disk
-Path("med_index").mkdir(exist_ok=True)
-index.storage_context.persist(persist_dir="med_index")
+def index_collection(client, name, items, embedder):
+    print(f"\nIndexing collection: {name}  ({len(items)} items)")
 
-print("✅ Index successfully built and saved to 'med_index/'")
+    # NEW API
+    coll = client.get_or_create_collection(name=name)
+
+    for batch in batchify(items, BATCH_SIZE):
+        texts = [x["text"] for x in batch]
+        ids = [x["id"] for x in batch]
+        metas = [x["metadata"] for x in batch]
+
+        # batch embedding
+        embeds = embedder.encode(texts, batch_size=BATCH_SIZE, convert_to_numpy=True)
+
+        coll.add(
+            ids=ids,
+            documents=texts,
+            metadatas=metas,
+            embeddings=embeds,
+        )
+
+        print(f" → Indexed batch of {len(ids)}")
+
+def main():
+    # Load raw ingestion JSON
+    with open(RAW_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Load embedding model
+    embedder = SentenceTransformer(MODEL_NAME)
+
+    # NEW 2024/2025 PERSISTENT CLIENT
+    client = PersistentClient(path="chroma_db")
+
+    # Index each dataset
+    index_collection(client, "medicines", data["med"], embedder)
+    index_collection(client, "remedies", data["rem"], embedder)
+    index_collection(client, "labtests", data["lab"], embedder)
+    index_collection(client, "medicalbook", data["book"], embedder)
+
+    print("\n✔ Chroma indexing completed successfully!")
+
+if __name__ == "__main__":
+    main()
